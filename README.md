@@ -24,7 +24,7 @@ A Neovim plugin for real-time GPG encryption and decryption of buffer content. T
 
 ```lua
 {
-  'jdearmas/nvim-encrypt.nvim',
+  'jdearmas/nvim-encrypt',
   config = function()
     require('nvim-encrypt').setup({
       gpg_key_id = 'YOUR_GPG_KEY_ID',  -- Replace with your GPG key ID
@@ -122,4 +122,3 @@ make test         # Run all tests
 ```
 
 See `tests/README.md` for detailed testing information.
-
