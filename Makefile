@@ -17,10 +17,13 @@ help:
 
 # Set up plenary.nvim as a git submodule
 setup-tests:
-	@if [ ! -d "tests/plenary.nvim" ]; then \
+	@if [ ! -f "tests/plenary.nvim/lua/plenary/init.lua" ]; then \
 		echo "Setting up plenary.nvim..."; \
-		git submodule add https://github.com/nvim-lua/plenary.nvim tests/plenary.nvim 2>/dev/null || \
-		git clone https://github.com/nvim-lua/plenary.nvim tests/plenary.nvim; \
+		git submodule update --init --recursive 2>/dev/null || true; \
+		if [ ! -f "tests/plenary.nvim/lua/plenary/init.lua" ]; then \
+			rm -rf tests/plenary.nvim 2>/dev/null || true; \
+			git clone --depth 1 https://github.com/nvim-lua/plenary.nvim tests/plenary.nvim; \
+		fi; \
 	else \
 		echo "plenary.nvim already set up"; \
 	fi

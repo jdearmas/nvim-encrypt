@@ -2,6 +2,8 @@
 
 A Neovim plugin for real-time GPG encryption and decryption of buffer content. Type in plain text, see it encrypted in real-time.
 
+[![Demo](https://asciinema.org/a/CCXDTMjNhOiMwEEc94h76bh7S.svg)](https://asciinema.org/a/CCXDTMjNhOiMwEEc94h76bh7S?autoplay=1)
+
 ## Features
 
 - **Real-time encryption**: Everything you type in Insert mode is encrypted with GPG as you type
