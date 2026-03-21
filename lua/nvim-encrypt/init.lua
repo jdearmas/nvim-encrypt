@@ -105,48 +105,59 @@ function M.encrypt(text)
 end
 
 -- Decrypt using GPG
+-- Returns: plaintext (string), gpg_stderr (string)
 function M.decrypt(text)
-  local temp_file = os.tmpname()
+  local temp_file   = os.tmpname()
   local temp_output = os.tmpname()
-  
-  -- Write encrypted content to temporary file
-  local file = io.open(temp_file, 'w')
+  local temp_stderr = os.tmpname()
+
+  -- Write encrypted content to temporary file (binary mode to preserve GPG binary data)
+  local file = io.open(temp_file, 'wb')
   if not file then
     os.remove(temp_file)
     os.remove(temp_output)
+    os.remove(temp_stderr)
     error("nvim-encrypt: Failed to create temporary file")
   end
   file:write(text)
   file:close()
-  
-  -- Decrypt from file to output file
+
   -- Use GNUPGHOME if set in environment
   local gpg_home = vim.env.GNUPGHOME or ""
   local env_prefix = ""
   if gpg_home ~= "" then
-    -- Escape GNUPGHOME path to handle spaces and special characters
     local escaped_gpg_home = gpg_home:gsub("'", "'\\''")
     env_prefix = string.format("GNUPGHOME='%s' ", escaped_gpg_home)
   end
-  
+
   -- Quote temporary file paths to handle spaces and special characters
-  local escaped_temp_file = temp_file:gsub("'", "'\\''")
+  local escaped_temp_file   = temp_file:gsub("'", "'\\''")
   local escaped_temp_output = temp_output:gsub("'", "'\\''")
-  
+  local escaped_temp_stderr = temp_stderr:gsub("'", "'\\''")
+
   -- Check if passphrase is available for testing, otherwise use normal GPG (which uses gpg-agent)
   local passphrase = vim.env.GPG_PASSPHRASE or ""
   local cmd
   if passphrase ~= "" then
     -- Testing mode: use passphrase from environment
     local escaped_passphrase = passphrase:gsub("'", "'\\''")
-    cmd = string.format("echo '%s' | %sgpg --batch --yes --trust-model always --pinentry-mode loopback --passphrase-fd 0 --decrypt --output '%s' '%s' 2>/dev/null", escaped_passphrase, env_prefix, escaped_temp_output, escaped_temp_file)
+    cmd = string.format(
+      "echo '%s' | %sgpg --batch --yes --trust-model always --pinentry-mode loopback --passphrase-fd 0 --decrypt --output '%s' '%s' 2>'%s'",
+      escaped_passphrase, env_prefix, escaped_temp_output, escaped_temp_file, escaped_temp_stderr)
   else
-    -- Normal mode: use gpg-agent for passphrase (allows GUI pinentry or cached passphrase)
-    cmd = string.format("%sgpg --batch --yes --trust-model always --decrypt --output '%s' '%s' 2>/dev/null", env_prefix, escaped_temp_output, escaped_temp_file)
+    -- Normal mode: use gpg-agent for passphrase (allows GUI pinentry or cached passphrase).
+    -- GPG_TTY lets pinentry find the terminal for passphrase prompting when called from nvim.
+    local tty = vim.fn.system('tty 2>/dev/null'):gsub('\n', '')
+    local tty_prefix = (tty ~= '' and tty ~= 'not a tty') and string.format("GPG_TTY='%s' ", tty) or ""
+    cmd = string.format(
+      "%s%sgpg --batch --yes --trust-model always --decrypt --output '%s' '%s' 2>'%s'",
+      tty_prefix, env_prefix, escaped_temp_output, escaped_temp_file, escaped_temp_stderr)
   end
   local success = os.execute(cmd)
-  
-  local result = ""
+
+  local result  = ""
+  local gpg_err = ""
+
   if success == 0 then
     local output_file = io.open(temp_output, 'r')
     if output_file then
@@ -154,12 +165,20 @@ function M.decrypt(text)
       output_file:close()
     end
   end
-  
+
+  -- Always capture stderr so callers can surface GPG error details
+  local stderr_file = io.open(temp_stderr, 'r')
+  if stderr_file then
+    gpg_err = stderr_file:read('*a') or ''
+    stderr_file:close()
+  end
+
   -- Clean up temporary files
   os.remove(temp_file)
   os.remove(temp_output)
-  
-  return result
+  os.remove(temp_stderr)
+
+  return result, gpg_err
 end
 
 -- Update buffer with encrypted content
@@ -334,10 +353,39 @@ end
 
 -- Decrypt entire buffer into a new split
 function M.decrypt_buffer()
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local text  = table.concat(lines, '\n')
-  local dec   = M.decrypt(text)
-  local buf   = vim.api.nvim_create_buf(false, true)
+  local text
+
+  -- Prefer reading the file directly from disk in binary mode to avoid the
+  -- text-layer corruption that nvim_buf_get_lines causes on binary GPG data
+  -- (null bytes dropped, binary content mangled, etc.).
+  local filepath = vim.api.nvim_buf_get_name(0)
+  if filepath ~= '' and vim.fn.filereadable(filepath) == 1 then
+    local file = io.open(filepath, 'rb')
+    if file then
+      text = file:read('*a')
+      file:close()
+    end
+  end
+
+  -- Fall back to buffer lines for unnamed/unsaved buffers
+  if not text then
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    text = table.concat(lines, '\n')
+  end
+
+  local dec, gpg_err = M.decrypt(text)
+
+  if dec == '' then
+    local msg = 'nvim-encrypt: Decryption failed. Is this a valid GPG-encrypted file?'
+    if gpg_err ~= '' then
+      -- Strip trailing whitespace for a cleaner notification
+      msg = msg .. '\nGPG: ' .. gpg_err:gsub('%s+$', '')
+    end
+    vim.notify(msg, vim.log.levels.ERROR)
+    return
+  end
+
+  local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(dec, '\n', { trimempty = false }))
   vim.cmd('vsplit')
   vim.api.nvim_set_current_buf(buf)
